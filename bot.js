@@ -75,6 +75,58 @@ function getUserLanguage(member) {
   return null;
 }
 
+function normalizeText(text) {
+  return (text || '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function detectLanguageSimple(text) {
+  const t = normalizeText(text).toLowerCase();
+
+  if (!t) return null;
+
+  // Russe
+  if (/[а-яё]/i.test(t)) return 'ru';
+
+  // Allemand
+  if (/[äöüß]/i.test(t) || /\b(und|der|die|das|ist|nicht|hallo|danke)\b/i.test(t)) {
+    return 'de';
+  }
+
+  // Italien
+  if (/[àèéìòù]/i.test(t) || /\b(ciao|grazie|come|sono|perché|buongiorno)\b/i.test(t)) {
+    return 'it';
+  }
+
+  // Espagnol
+  if (/[ñ¿¡]/i.test(t) || /\b(hola|gracias|como|estás|para|buenos)\b/i.test(t)) {
+    return 'es';
+  }
+
+  // Portugais
+  if (/[ãõç]/i.test(t) || /\b(olá|obrigado|você|como|para|bom dia)\b/i.test(t)) {
+    return 'pt';
+  }
+
+  // Polonais
+  if (/[ąćęłńóśźż]/i.test(t) || /\b(cześć|dziękuję|jest|dzień|dobry)\b/i.test(t)) {
+    return 'pl';
+  }
+
+  // Français
+  if (/[àâçéèêëîïôûùüÿœæ]/i.test(t) || /\b(bonjour|merci|salut|avec|pour|est|une|des)\b/i.test(t)) {
+    return 'fr';
+  }
+
+  // Anglais
+  if (/\b(hello|thanks|please|what|how|good|morning|everyone|guys)\b/i.test(t)) {
+    return 'en';
+  }
+
+  return null;
+}
+
 async function translateText(originalText, targetLanguageCode) {
   const translated = await translate(originalText, {
     to: targetLanguageCode,
@@ -92,6 +144,7 @@ async function getOrCreateTranslation(messageId, originalText, languageCode) {
     translationCache.set(messageId, {
       originalText,
       translations: {},
+      detectedLanguage: detectLanguageSimple(originalText),
     });
   }
 
@@ -104,6 +157,18 @@ async function getOrCreateTranslation(messageId, originalText, languageCode) {
   const translated = await translateText(originalText, languageCode);
   entry.translations[languageCode] = translated;
   return translated;
+}
+
+function getDetectedLanguage(messageId, originalText) {
+  if (!translationCache.has(messageId)) {
+    translationCache.set(messageId, {
+      originalText,
+      translations: {},
+      detectedLanguage: detectLanguageSimple(originalText),
+    });
+  }
+
+  return translationCache.get(messageId).detectedLanguage || null;
 }
 
 client.once(Events.ClientReady, () => {
@@ -128,6 +193,7 @@ client.on(Events.MessageCreate, async (message) => {
     translationCache.set(message.id, {
       originalText: message.content,
       translations: {},
+      detectedLanguage: detectLanguageSimple(message.content),
     });
   } catch (error) {
     console.error('Erreur bouton traduire :', error);
@@ -160,6 +226,24 @@ client.on(Events.InteractionCreate, async (interaction) => {
         content: 'Impossible de lire le message source.',
         ephemeral: true,
       });
+      return;
+    }
+
+    const detectedLanguage = getDetectedLanguage(messageId, originalText);
+
+    if (detectedLanguage && detectedLanguage === userLanguage) {
+      await interaction.reply({
+        content: `ℹ️ Ce message semble déjà être en **${LANGUAGES[userLanguage].label}**.`,
+        ephemeral: true,
+      });
+
+      setTimeout(async () => {
+        try {
+          await interaction.deleteReply();
+        } catch (error) {
+        }
+      }, 60 * 1000);
+
       return;
     }
 
