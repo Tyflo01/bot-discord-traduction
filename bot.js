@@ -7,7 +7,6 @@ const {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
-  StringSelectMenuBuilder,
   Events,
 } = require('discord.js');
 
@@ -17,6 +16,7 @@ const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.GuildMembers,
     GatewayIntentBits.MessageContent,
   ],
   partials: [Partials.Channel],
@@ -40,29 +40,39 @@ const LANGUAGES = {
   ru: { label: 'Русский', emoji: '🇷🇺' },
 };
 
+const ROLE_TO_LANGUAGE = {
+  [process.env.ROLE_FR]: 'fr',
+  [process.env.ROLE_EN]: 'en',
+  [process.env.ROLE_DE]: 'de',
+  [process.env.ROLE_IT]: 'it',
+  [process.env.ROLE_ES]: 'es',
+  [process.env.ROLE_PT]: 'pt',
+  [process.env.ROLE_PL]: 'pl',
+  [process.env.ROLE_RU]: 'ru',
+};
+
 function buildTranslateButton(messageId) {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder()
-      .setCustomId(`open_translate_menu:${messageId}`)
+      .setCustomId(`translate_auto:${messageId}`)
       .setLabel('Traduire')
       .setEmoji('🌍')
       .setStyle(ButtonStyle.Secondary)
   );
 }
 
-function buildLanguageMenu(messageId) {
-  const options = Object.entries(LANGUAGES).map(([code, lang]) => ({
-    label: lang.label,
-    value: `translate:${messageId}:${code}`,
-    emoji: lang.emoji,
-  }));
+function getUserLanguage(member) {
+  if (!member || !member.roles || !member.roles.cache) {
+    return null;
+  }
 
-  return new ActionRowBuilder().addComponents(
-    new StringSelectMenuBuilder()
-      .setCustomId(`language_select:${messageId}`)
-      .setPlaceholder('Choisissez une langue')
-      .addOptions(options)
-  );
+  for (const roleId of member.roles.cache.keys()) {
+    if (ROLE_TO_LANGUAGE[roleId]) {
+      return ROLE_TO_LANGUAGE[roleId];
+    }
+  }
+
+  return null;
 }
 
 async function translateText(originalText, targetLanguageCode) {
@@ -126,59 +136,53 @@ client.on(Events.MessageCreate, async (message) => {
 
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
-    if (interaction.isButton()) {
-      if (!interaction.customId.startsWith('open_translate_menu:')) return;
+    if (!interaction.isButton()) return;
+    if (!interaction.customId.startsWith('translate_auto:')) return;
 
-      const [, messageId] = interaction.customId.split(':');
+    const [, messageId] = interaction.customId.split(':');
 
+    const userLanguage = getUserLanguage(interaction.member);
+
+    if (!userLanguage || !LANGUAGES[userLanguage]) {
       await interaction.reply({
-        content: 'Choisissez la langue de traduction :',
-        components: [buildLanguageMenu(messageId)],
+        content:
+          "❌ Aucune langue n'est définie sur ton profil. Choisis d'abord une langue dans le salon des rôles.",
         ephemeral: true,
       });
-
       return;
     }
 
-    if (interaction.isStringSelectMenu()) {
-      if (!interaction.customId.startsWith('language_select:')) return;
+    const sourceMessage = await interaction.channel.messages.fetch(messageId);
+    const originalText = sourceMessage?.content?.trim();
 
-      const selected = interaction.values[0];
-      const [, messageId, languageCode] = selected.split(':');
-
-      const sourceMessage = await interaction.channel.messages.fetch(messageId);
-      const originalText = sourceMessage?.content?.trim();
-
-      if (!originalText) {
-        await interaction.update({
-          content: 'Impossible de lire le message source.',
-          components: [],
-        });
-        return;
-      }
-
-      const translatedText = await getOrCreateTranslation(
-        messageId,
-        originalText,
-        languageCode
-      );
-
-      const lang = LANGUAGES[languageCode];
-
-      await interaction.update({
-        content: `${lang.emoji} **${lang.label}**\n\n${translatedText}`,
-        components: [],
+    if (!originalText) {
+      await interaction.reply({
+        content: 'Impossible de lire le message source.',
+        ephemeral: true,
       });
-
-      setTimeout(async () => {
-        try {
-          await interaction.deleteReply();
-        } catch (error) {
-        }
-      }, 2 * 60 * 1000);
-
       return;
     }
+
+    await interaction.deferReply({ ephemeral: true });
+
+    const translatedText = await getOrCreateTranslation(
+      messageId,
+      originalText,
+      userLanguage
+    );
+
+    const lang = LANGUAGES[userLanguage];
+
+    await interaction.editReply({
+      content: `${lang.emoji} **${lang.label}**\n\n${translatedText}`,
+    });
+
+    setTimeout(async () => {
+      try {
+        await interaction.deleteReply();
+      } catch (error) {
+      }
+    }, 2 * 60 * 1000);
   } catch (error) {
     console.error('Erreur interaction :', error);
 
